@@ -1,0 +1,19 @@
+## Interface: 11509
+## Title: SRCheck
+## Notes: Verifies softres.it soft-reserve counts against your guild's SR rules (role, world buffs, flask, ...). Works with the Gargul export string.
+## Author: petr
+## Version: 1.2.0
+## IconTexture: Interface\Icons\INV_Misc_Note_05
+## SavedVariables: SRCheckDB
+## OptionalDeps: Gargul
+
+Libs\LibStub\LibStub.lua
+Libs\LibDeflate\LibDeflate.lua
+
+Codec.lua
+Data.lua
+Core.lua
+Import.lua
+Verify.lua
+UI.lua
+Options.lua
