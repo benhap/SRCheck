@@ -41,7 +41,9 @@ sources, in this order:
 4. **In game**: the raid **Main Tank** flag, or an assigned group role.
 5. Otherwise **DPS**.
 
-The Role tooltip shows which source was used. For other reasons to grant or
+The Role tooltip shows which source was used. The row tooltip also shows the
+player's **softres note**, e.g. when the raid asks people to note which buff
+option they go for. For other reasons to grant or
 remove SRs, use the **Adj** column (`+1` / `-1`, this raid only).
 
 ### What is shown: bonuses or deductions?
@@ -96,17 +98,23 @@ remembers it for that instance.
 
 | Profile | Base | Rules | Assignments (count as Tank) |
 | --- | --- | --- | --- |
-| **BWL** | DPS 2, Tank/Healer 3 | `5 WB` +1, `Flask` +1 | Pull Hunter, Mage Tank |
+| **BWL** | DPS 3, Tank/Healer 4 | `3 WB + Flask or 6 WB` +1 | Pull Hunter, Mage Tank |
 | **AQ40** | DPS 3, Tank/Healer 4 | `6 WB + Flask` +1 (both needed) | Pull Hunter, Warlock Tank |
-| **Test** | 1 for everyone | Mark of the Wild +1, Thorns +1, any world buff +1 | none |
+| **Test** | DPS 3, Tank/Healer 4 | `Flask or 3 WB` +1 | none |
 
-Maximums: BWL is 4 for DPS and 5 for tanks, healers and assignments; AQ40 is 4
-and 5. The AQ40 gear check and consumables prerequisites are not checked by the
-addon. Use **Test** in a group to check detection;
-Gift of the Wild also counts as Mark of the Wild there. **Reset profile to
+Maximums: all three are 4 for DPS and 5 for tanks, healers and assignments.
+Test is used e.g. for MC (select it once while an MC raid is loaded and it is
+picked automatically after that). The AQ40 gear check and consumables
+prerequisites are not checked by the addon. **Reset profile to
 defaults** restores a preset, and keeps who is assigned what.
 
 ### Editing
+
+Every field is saved as you type, so Escape or closing the window never loses
+an edit. Problems are shown in red in the rules window and at the top right of
+the main window: a rule using a group with no buffs, a rule naming an unknown
+group, or two groups with the same name. Groups no rule uses are marked
+*not used*.
 
 - **Base SRs** per role: what a player gets with no rule met.
 - **Raid assignments**: name plus the role it counts as (its base SRs and
@@ -151,6 +159,9 @@ the flask now:
 - Rules are evaluated with "unknown" for the held group. In AQ40, `6 WB + Flask`
   still **fails on a missing flask**, so the player is deducted right away.
   Players who have the flask show as **Pending** until WB is checked.
+- An OR rule like BWL's `3 WB + Flask or 6 WB` can't be decided by the flask
+  alone, since 6 WB is enough without one. Instead the status shows what each
+  player still needs: `Pending: 3 WB` with a flask, `Pending: 6 WB` without.
 - Announce, whispers and the report say what was checked, e.g.
   `(checked: Flask; later: WB)`.
 - After the unboon, tick `WB` again and scan. The corrected string is always
@@ -168,6 +179,8 @@ This setting is per raid; `/src skip <group>` and `/src check <group|all>` do th
 - The game only shows buffs of players within roughly **100 yards**.
   Everyone else is *Not verified*, never deducted. Scan at the entrance or on
   a ready check.
+- Players with a **Chronoboon** loaded are marked `[boon]`. Their stored
+  world buffs aren't active yet, so they don't count until they unboon.
 - Scans are **sticky** by default: a buff seen in any scan of this raid keeps
   counting, since world buffs are lost on death. You can turn this off in the
   rules window.

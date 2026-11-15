@@ -177,6 +177,49 @@ local function anyOf(values, n)
     return result
 end
 
+-- Groups a rule uses that list no buffs (so they can never count): { "Flask" }
+function SRC.RuleEmptyGroups(profile, rule)
+    local groups, names, seen = groupIndex(profile), {}, {}
+    for _, terms in ipairs((SRC.ParseCondition(rule.condition))) do
+        for _, t in ipairs(terms) do
+            local g = groups[t.group]
+            if g and not seen[t.group] and #SRC.ParseSpellList(g.spells) == 0 then
+                seen[t.group] = true
+                names[#names + 1] = g.name
+            end
+        end
+    end
+    return names
+end
+
+-- Setup mistakes worth showing: broken rules, empty groups in use, duplicate
+-- group names. Returns a list of short texts.
+function SRC:ProfileProblems(profile)
+    local problems, names = {}, {}
+    for _, g in ipairs(profile.groups or {}) do
+        local key = SRC.LowerUTF8(SRC.Trim(g.name or ""))
+        if names[key] then problems[#problems + 1] = ("two groups named '%s'"):format(g.name) end
+        names[key] = true
+    end
+    local reported = {}
+    for _, rule in ipairs(profile.rules or {}) do
+        if rule.enabled ~= false then
+            local err = SRC.ValidateRule(profile, rule)
+            if err then
+                problems[#problems + 1] = ("rule '%s': %s"):format(rule.name, err)
+            else
+                for _, name in ipairs(SRC.RuleEmptyGroups(profile, rule)) do
+                    if not reported[name] then
+                        reported[name] = true
+                        problems[#problems + 1] = ("group '%s' has no buffs (used by '%s')"):format(name, rule.name)
+                    end
+                end
+            end
+        end
+    end
+    return problems
+end
+
 -- counts: lower group name -> number of entries of that group present (nil
 -- when the player has not been scanned). held: lower group names on hold,
 -- whose terms count as unknown, so "6 WB + Flask" still fails on a missing
@@ -509,6 +552,9 @@ function SRC:EvaluateRow(profile, p, m, how)
     row.state = scan and scan.state or "unscanned"
     row.scannedAt = scan and scan.at
     local auras = m and (self.db.options.sticky and s.seen[m.key] or s.last[m.key])
+    -- Chronoboon in the latest scan: their world buffs are stored, not active yet.
+    local last = m and s.last[m.key]
+    row.boon = (last and last.ids[SRC.CHRONOBOON_ID]) and true or nil
 
     -- Buff group counts, e.g. { wb = 4, flask = 1 }, plus what matched (tooltip).
     local counts
@@ -527,10 +573,12 @@ function SRC:EvaluateRow(profile, p, m, how)
     local requiredFailed, requiredUnknown = false, false
     row.base = base
     row.rules = {}
+    row.needs = {} -- e.g. { "3 WB" }: what pending rules still need from groups on hold
     for _, rule in ipairs(profile.rules) do
         if rule.enabled ~= false and (not rule.roles or rule.roles[row.role])
             and not SRC.ValidateRule(profile, rule) then
             local r = SRC.EvaluateRule(profile, rule, counts, self:HeldGroups())
+            if r.pending then row.needs[#row.needs + 1] = SRC.StillNeeded(r) end
             if rule.required then
                 if r.ok == false then
                     requiredFailed = true
@@ -659,6 +707,36 @@ function SRC.MissingText(row)
         return ("max %d SR as %s"):format(row.maxAllowed, row.roleLabel)
     end
     return table.concat(parts, ", ")
+end
+
+-- What a rule waiting for groups on hold still needs from them, e.g. for
+-- "3 WB + Flask or 6 WB" with WB on hold: "3 WB" with a flask, "6 WB" without.
+function SRC.StillNeeded(r)
+    if not r.pending then return nil end
+    local alternatives, label, minNeed, singleGroup = {}, nil, nil, true
+    for _, o in ipairs(r.options) do
+        if o.ok == nil then -- this way can still work out
+            local held = {}
+            for _, t in ipairs(o.terms) do
+                if t.held then held[#held + 1] = t end
+            end
+            if #held == 1 and (label == nil or label == held[1].label) then
+                label = held[1].label
+                minNeed = math.min(minNeed or held[1].need, held[1].need)
+            else
+                singleGroup = false
+            end
+            local parts = {}
+            for _, t in ipairs(held) do
+                parts[#parts + 1] = (t.need > 1 and (t.need .. " ") or "") .. t.label
+            end
+            alternatives[#alternatives + 1] = table.concat(parts, " + ")
+        end
+    end
+    if singleGroup and label then
+        return (minNeed > 1 and (minNeed .. " ") or "") .. label -- "3 WB or 6 WB" -> "3 WB"
+    end
+    return table.concat(alternatives, " or ")
 end
 
 -- Buff groups on hold that this player's result is waiting for: { "WB" }
@@ -834,6 +912,7 @@ function SRC:BuildReport()
             line = line .. " - " .. SRC.StateText(row)
         elseif row.status == "PENDING" then
             line = line .. " - waiting for: " .. table.concat(SRC.WaitingFor(row), ", ")
+            if #row.needs > 0 then line = line .. " (needs " .. table.concat(row.needs, "; ") .. ")" end
         elseif row.status == "UNDER" then
             line = line .. (" - may add %d"):format(row.extra)
         elseif row.status == "SKIPPED" then

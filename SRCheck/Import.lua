@@ -99,6 +99,8 @@ function SRC.FromGargul(root)
         local name = type(entry) == "table" and str(entry.name)
         if name and SRC.Trim(name) ~= "" then
             local p = addPlayer(data, name, str(entry.class))
+            local note = str(entry.note) and SRC.Trim(entry.note)
+            if note and note ~= "" then p.note = note end
             if type(entry.items) == "table" then
                 for pos, item in ipairs(entry.items) do
                     local id = tonumber(type(item) == "table" and item.id or item)
@@ -132,6 +134,8 @@ function SRC.FromCSV(text)
         local name = SRC.Trim(row[col.Name])
         if name ~= "" then
             local p = addPlayer(data, name, col.Class and row[col.Class], col.Spec and row[col.Spec])
+            local note = col.Note and SRC.Trim(row[col.Note])
+            if note and note ~= "" then p.note = note end
             local id = tonumber(row[col.ItemId])
             if id and id > 0 then
                 p.items[#p.items + 1] = { id = id, order = #p.items, seq = #p.items + 1 }

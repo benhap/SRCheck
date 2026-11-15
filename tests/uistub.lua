@@ -38,10 +38,17 @@ local methods = {
     GetText = function(self) return rawget(self, "text_") or "" end,
     SetChecked = function(self, v) self.checked = v and true or false end,
     GetChecked = function(self) return rawget(self, "checked") end,
-    SetFocus = function(self) self.focus = true end,
+    -- Like WoW: only one edit box has focus; clicking buttons does not take it away.
+    SetFocus = function(self)
+        local current = TEST.focused
+        if current and current ~= self then current:ClearFocus() end
+        TEST.focused = self
+        self.focus = true
+    end,
     ClearFocus = function(self)
         if rawget(self, "focus") then
             self.focus = false
+            if TEST.focused == self then TEST.focused = nil end
             self:Fire("OnEditFocusLost")
         end
     end,

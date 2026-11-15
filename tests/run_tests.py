@@ -115,7 +115,7 @@ FIXTURE = {
         {"name": "Healz", "class": "priest", "note": None,
          "items": [{"id": 1, "note": "", "order": 0}, {"id": 2, "note": "", "order": 1},
                    {"id": 3, "note": "", "order": 2}, {"id": 4, "note": "", "order": 3}]},
-        {"name": "Aglaée", "class": "hunter", "note": None,  # in game: Aglaee (accents)
+        {"name": "Aglaée", "class": "hunter", "note": "will do 6 WB",  # in game: Aglaee (accents)
          "items": [{"id": 10, "note": "", "order": 0}, {"id": 10, "note": "", "order": 1},
                    {"id": 10, "note": "", "order": 2}]},
         {"name": "Stabby", "class": "rogue", "note": None,  # placed out of order: order 2 is last
@@ -328,6 +328,7 @@ def test_ui(lua, ns):
 
     first.Fire(first, "OnEnter")
     tip = "\n".join(lua.eval("TEST.tooltip").values())
+    check("softres note: |cffffffffwill do 6 WB|r" in tip, "softres note shown in the tooltip")
     check("Allowed" in tip and "dropped" in tip and "WB: 2" in tip, "row tooltip:\n    " + tip.replace("\n", "\n    "))
 
     # Role menu: pick Tank (all raids), then back to Auto.
@@ -380,6 +381,12 @@ def test_ui(lua, ns):
     checks[0].checked = True
     checks[0].Fire(checks[0], "OnClick")
     check(lua.eval("SRCheckDB.session.heldGroups.wb") is None, "ticking checks it again")
+    lua.eval("""function(ns) table.insert(ns:GetProfile().rules, { name = "Buffs", condition = "3 WB + Flask or 6 WB",
+        bonus = 1, enabled = true, roles = { DPS = true, TANK = true, HEALER = true } }) end""")(ns)
+    ns.RefreshUI(ns)
+    ag = [r for r in main.rows.values() if r.shown and r.data.key == "aglaee"][0]
+    check("Buffs (WB 2, no Flask)" in ag.rules.text_, "multi-part rule shows group counts: " + ag.rules.text_)
+    lua.eval("function(ns) table.remove(ns:GetProfile().rules) end")(ns)
 
     nosr = [r for r in main.rows.values() if r.shown and r.data.key == "lateguy"][0]
     check(nosr.check.shown is False, "no checkbox for raiders without SR")
@@ -394,11 +401,12 @@ def test_ui(lua, ns):
     check(opt.profName.text_ == "Generic", "options shows profile")
     cond = opt.rules[1].condition
     check(cond.text_ == "3 WB", "rule 1 condition shown")
-    lua.eval("""function(eb) eb:SetFocus(); eb:SetText("6 WB or 3 WB + Flask"); eb:ClearFocus() end""")(cond)
+    typed = lua.eval("""function(eb, text) eb:SetFocus(); eb:SetText(text); eb:Fire("OnTextChanged", true); eb:ClearFocus() end""")
+    typed(cond, "6 WB or 3 WB + Flask")
     check(lua.eval("SRCheckDB.profiles[1].rules[1].condition") == "6 WB or 3 WB + Flask", "condition committed")
-    lua.eval("""function(eb) eb:SetFocus(); eb:SetText("6 Wb or 3 Bogus"); eb:ClearFocus() end""")(cond)
+    typed(cond, "6 Wb or 3 Bogus")
     check("invalid" in opt.rules[1].err.text_, "unknown group flagged")
-    lua.eval("""function(eb) eb:SetFocus(); eb:SetText("3 WB"); eb:ClearFocus() end""")(cond)
+    typed(cond, "3 WB")
     opt.addRule.Fire(opt.addRule, "OnClick")
     check(lua.eval("#SRCheckDB.profiles[1].rules") == 3, "+ Rule adds a rule")
     opt.rules[3]["del"].Fire(opt.rules[3]["del"], "OnClick")
@@ -439,6 +447,68 @@ def raid_fixture(instance, players):
             "softreserves": players, "hardreserves": [], "bonusrolls": []}
 
 
+def test_options_editing():
+    """Edits must land in the profile/row shown, whatever the user clicks next."""
+    print("rules editor: saving edits")
+    lua, ns = new_runtime(ui=True, generic=False, seed="""SRCheckDB = nil""")
+    # Test: three groups with distinct contents, so a leak or shift is visible.
+    lua.eval("""function() for _, p in ipairs(SRCheckDB.profiles) do if p.name == "Test" then
+        p.groups = { { name = "One", spells = "111" }, { name = "Two", spells = "222" },
+                     { name = "WB", spells = "333" } } end end end""")()
+    ns.ToggleOptions(ns)
+    opt = ns.options
+    typed = lua.eval("""function(eb, text) eb:SetFocus(); eb:SetText(text); eb:Fire("OnTextChanged", true) end""")
+    group = lambda prof, i: lua.eval("function(p, i) for _, x in ipairs(SRCheckDB.profiles) do "
+                                     "if x.name == p then return x.groups[i] end end end")(prof, i)
+    test_motw = group("Test", 1).spells
+
+    # 1. A box still focused while switching profile must not write into the other profile.
+    wb_box = opt.groups[1].spells          # BWL: WB list
+    wb_box.SetFocus(wb_box)                 # user clicked into it (e.g. to copy the list)
+    lua.eval("function(ns) ns:CycleProfile(1); ns:CycleProfile(1) end")(ns)   # BWL -> AQ40 -> Test
+    check(lua.eval("SRCheckDB.activeProfile") == "Test", "switched to Test")
+    opt.rules[1].condition.SetFocus(opt.rules[1].condition)                     # clicks another box
+    check(group("Test", 1).spells == test_motw, "BWL's WB list did not leak into Test's first group")
+    check(opt.groups[1].spells.text_ == test_motw, "boxes show the Test profile after switching")
+
+    # 2. Typing is saved even if the user then presses Escape or closes the window.
+    flask_box = opt.groups[2].spells
+    typed(flask_box, "17626/Flask of the Titans")
+    flask_box.Fire(flask_box, "OnEscapePressed")
+    check(group("Test", 2).spells == "17626/Flask of the Titans", "Escape keeps what was typed")
+    check(group("Test", 1).spells == "111", "other rows untouched")
+    name_box = opt.groups[2].name
+    typed(name_box, "Flask")
+    opt.Hide(opt)
+    check(group("Test", 2).name == "Flask", "closing the window keeps what was typed")
+    opt.Show(opt)
+
+    # 3. Deleting a row while another row's box is focused must not shift the edit into the wrong group.
+    third = opt.groups[3].spells            # Test: WB list
+    third.SetFocus(third)
+    opt.groups[1]["del"].Fire(opt.groups[1]["del"], "OnClick")                     # delete MotW
+    opt.rules[1].name.SetFocus(opt.rules[1].name)
+    check(group("Test", 1).name == "Flask" and group("Test", 1).spells == "17626/Flask of the Titans",
+          "deleting a row doesn't overwrite the group that moved up")
+    check(group("Test", 2).spells == "333", "WB group intact after the delete")
+
+    # 4. Problems are reported: empty group used by a rule, duplicate names.
+    lua.eval("""function(ns) local p = ns:GetProfile()
+        table.insert(p.groups, { name = "Empty", spells = "" })
+        table.insert(p.groups, { name = "WB", spells = "1" })
+        table.insert(p.rules, { name = "Uses empty", condition = "Empty", bonus = 1, enabled = true }) end""")(ns)
+    problems = "\n".join(ns.ProfileProblems(ns, ns.GetProfile(ns)).values())
+    check("'Empty' has no buffs" in problems and "two groups named 'wb'" in problems.lower(),
+          "profile problems listed: " + problems.replace("\n", " | "))
+    ns.RefreshOptions(ns, True)
+    ns.ToggleUI(ns)
+    check("has no buffs" in ns.main.problemText.text_ or "two groups" in ns.main.problemText.text_,
+          "main window warns about rule problems: " + ns.main.problemText.text_)
+    statuses = [opt.groups[i].status.text_ for i in range(1, 6) if opt.groups[i].name.shown]
+    check(any("empty" in x for x in statuses) and any("duplicate" in x for x in statuses),
+          "group rows flag empty / duplicate: %s" % statuses)
+
+
 def test_presets():
     print("preset profiles")
     # Migration: an install that already has its own profile gets the presets added once.
@@ -451,6 +521,30 @@ def test_presets():
     check(lua.eval("SRCheckDB.activeProfile") == "Default", "active profile untouched")
     check(lua.eval("SRCheckDB.instanceProfile.bwl") == "BWL" and lua.eval("SRCheckDB.instanceProfile.aq40") == "AQ40",
           "bwl/aq40 auto-select their presets")
+
+    # Old BWL preset (2/3, +1 5 WB, +1 Flask) -> 3/4, +1 for "3 WB + Flask or 6 WB"; edited ones kept.
+    old_bwl = ('{ { name = "5 WB", condition = "5 WB", bonus = 1 }, { name = "Flask", condition = "Flask", bonus = 1 } }')
+    lua, ns = new_runtime(generic=False, seed="""SRCheckDB = { presetsVersion = 5, profiles = {
+        { name = "BWL", base = { DPS = 2, TANK = 3, HEALER = 3 }, groups = {}, rules = %s },
+        { name = "Mine", base = { DPS = 2, TANK = 3, HEALER = 3 }, groups = {}, rules = %s } } }""" % (old_bwl, old_bwl))
+    bwl = lua.eval("SRCheckDB.profiles[1]")
+    check(bwl.base.DPS == 3 and bwl.base.TANK == 4 and len(bwl.rules) == 1
+          and bwl.rules[1].condition == "3 WB + Flask or 6 WB", "old BWL preset -> today's BWL rules")
+    check(len(lua.eval("SRCheckDB.profiles[2].rules")) == 2, "other profiles untouched")
+    lua, ns = new_runtime(generic=False, seed="""SRCheckDB = { presetsVersion = 5, profiles = {
+        { name = "BWL", base = { DPS = 2, TANK = 3, HEALER = 4 }, groups = {}, rules = %s } } }""" % old_bwl)
+    check(lua.eval("SRCheckDB.profiles[1].base.DPS") == 2, "edited BWL preset kept")
+
+    # v7: any Test profile becomes the new Test preset (3/4, Flask or 3 WB); assignments kept.
+    lua, ns = new_runtime(generic=False, seed="""SRCheckDB = { presetsVersion = 6, profiles = {
+        { name = "Test", base = { DPS = 3, TANK = 4, HEALER = 4 }, assigned = { bob = "X" },
+          groups = { { name = "MotW", spells = "wb list" }, { name = "Thorns", spells = "flask list" },
+                     { name = "WB", spells = "wb list" }, { name = "Flask", spells = "" } },
+          rules = { { name = "Flask or WB", condition = "Flask or 3 WB", bonus = 1 } } } } }""")
+    tp = lua.eval("SRCheckDB.profiles[1]")
+    check([g.name for g in tp.groups.values()] == ["WB", "Flask"] and tp.groups[2].spells == ns.FLASK_SPELLS
+          and tp.rules[1].condition == "Flask or 3 WB" and tp.assigned.bob == "X",
+          "mixed-up Test profile replaced by the Test preset (assignments kept)")
 
     # Old AQ40 presets ("required, else 0 SR": one rule or split in two) become base + 1.
     for old in ('{ { name = "6 WB + Flask", condition = "6 WB + Flask", required = true, bonus = 0 } }',
@@ -469,32 +563,55 @@ def test_presets():
     ALL5 = WB[:5] + [TITANS]
     ALL6 = WB[:6] + [TITANS]
 
-    # ---- BWL: 2 SR DPS / 3 SR tank, heal, pull hunter, mage tank; +1 for 5 WB, +1 for flask
+    # ---- BWL: 3 SR DPS / 4 SR tank, heal, pull hunter, mage tank; +1 for 3 WB + flask or 6 WB
     ns.Import(ns, gargul_encode(raid_fixture("bwl", [
-        sr("Rogue", "rogue", 4), sr("Mage", "mage", 4), sr("Tanky", "warrior", 5), sr("Huntard", "hunter", 3),
-        sr("Frosty", "mage", 5), sr("Locky", "warlock", 3)])))
+        sr("Rogue", "rogue", 4), sr("Sixer", "warrior", 4), sr("Fiver", "mage", 4), sr("Twoflask", "warlock", 4),
+        sr("Tanky", "warrior", 5), sr("Huntard", "hunter", 4), sr("Frosty", "mage", 5), sr("Basic", "priest", 3),
+        sr("Greedy", "rogue", 5)])))
     check(ns.GetProfile(ns).name == "BWL", "bwl raid auto-selects BWL")
     ns.SetRole(ns, "tanky", "TANK")
     lua.eval("SlashCmdList.SRCHECK")("role Huntard pull hunter")
     lua.eval("SlashCmdList.SRCHECK")("role Frosty Mage Tank")
     check(lua.eval("SRCheckDB.profiles[1].assigned.huntard") == "Pull Hunter", "/src role ... pull hunter")
     set_raid(lua, [
-        {"name": "Rogue", "class": "ROGUE", "buffs": ALL5},
-        {"name": "Mage", "class": "MAGE", "buffs": WB[:4] + [TITANS]},
-        {"name": "Tanky", "class": "WARRIOR", "buffs": ALL5},
-        {"name": "Huntard", "class": "HUNTER", "buffs": []},
-        {"name": "Frosty", "class": "MAGE", "buffs": ALL5},
-        {"name": "Locky", "class": "WARLOCK", "buffs": WB[:2]},
+        {"name": "Rogue", "class": "ROGUE", "buffs": WB[:3] + [TITANS]},     # 3 WB + flask
+        {"name": "Sixer", "class": "WARRIOR", "buffs": WB[:6]},              # 6 WB, no flask
+        {"name": "Fiver", "class": "MAGE", "buffs": WB[:5]},                 # 5 WB, no flask
+        {"name": "Twoflask", "class": "WARLOCK", "buffs": WB[:2] + [TITANS]},
+        {"name": "Tanky", "class": "WARRIOR", "buffs": WB[:6]},
+        {"name": "Huntard", "class": "HUNTER", "buffs": [349981]},          # WB stored in a Chronoboon
+        {"name": "Frosty", "class": "MAGE", "buffs": WB[:3] + [TITANS]},
+        {"name": "Basic", "class": "PRIEST", "buffs": []},
+        {"name": "Greedy", "class": "ROGUE", "buffs": WB[:8] + [TITANS]},
     ])
     ns.Scan(ns, True)
     by, _ = evaluate(ns)
-    check(by["rogue"].status == "OK" and by["rogue"].maxAllowed == 4, "BWL DPS 5 WB + flask: 4")
-    check(by["mage"].deduct == 1 and ns.MissingText(by["mage"]) == "WB 4/5", "BWL DPS 4 WB + flask: 3, " + ns.MissingText(by["mage"]))
-    check(by["tanky"].status == "OK" and by["tanky"].maxAllowed == 5, "BWL tank 5 WB + flask: 5")
-    check(by["huntard"].status == "OK" and by["huntard"].maxAllowed == 3 and by["huntard"].roleLabel == "Pull Hunter",
-          "BWL pull hunter without buffs: 3")
-    check(by["frosty"].status == "OK" and by["frosty"].maxAllowed == 5, "BWL mage tank 5 WB + flask: 5")
-    check(by["locky"].deduct == 1 and ns.MissingText(by["locky"]) == "WB 2/5, Flask missing", "BWL DPS unbuffed: 2")
+    check(by["rogue"].status == "OK" and by["rogue"].maxAllowed == 4, "BWL DPS 3 WB + flask: 4")
+    check(by["huntard"].boon and not by["rogue"].boon, "Chronoboon in the scan is flagged")
+    check(by["sixer"].status == "OK" and by["sixer"].maxAllowed == 4, "BWL DPS 6 WB without flask: 4")
+    check(by["fiver"].deduct == 1 and ns.MissingText(by["fiver"]) == "Buffs: Flask 0/1 or WB 5/6",
+          "BWL DPS 5 WB, no flask: 3 (" + ns.MissingText(by["fiver"]) + ")")
+    check(by["twoflask"].deduct == 1 and ns.MissingText(by["twoflask"]) == "Buffs: WB 2/3 or WB 2/6",
+          "BWL DPS 2 WB + flask: 3 (" + ns.MissingText(by["twoflask"]) + ")")
+    check(by["tanky"].status == "OK" and by["tanky"].maxAllowed == 5, "BWL tank 6 WB: 5")
+    check(by["huntard"].status == "OK" and by["huntard"].maxAllowed == 4 and by["huntard"].roleLabel == "Pull Hunter",
+          "BWL pull hunter without buffs: 4")
+    check(by["frosty"].status == "OK" and by["frosty"].maxAllowed == 5, "BWL mage tank 3 WB + flask: 5")
+    check(by["basic"].status == "OK", "BWL DPS with 3 SR needs nothing")
+    check(by["greedy"].deduct == 1, "BWL DPS with 5 SR: over the max")
+    check("Buffs +1 (3 WB + Flask or 6 WB)" in ns.ProfileSummary(ns, ns.GetProfile(ns)), "BWL profile summary")
+
+    # Flask now, WB after the unboon: the OR rule can't be decided yet, but says what is still needed.
+    lua.eval("SlashCmdList.SRCHECK")("skip WB")
+    by, _ = evaluate(ns)
+    check(by["rogue"].status == "PENDING" and by["rogue"].needs[1] == "3 WB", "WB on hold, flask on: needs 3 WB")
+    check(by["sixer"].status == "PENDING" and by["sixer"].needs[1] == "6 WB", "WB on hold, no flask: needs 6 WB")
+    check(by["fiver"].status == "PENDING" and by["twoflask"].needs[1] == "3 WB", "nobody deducted for the OR rule yet")
+    check(by["basic"].status == "OK" and by["greedy"].deduct == 1, "3 SR still OK, 5 SR still deducted")
+    check("needs 6 WB" in ns.BuildReport(ns), "report says what is still needed")
+    lua.eval("SlashCmdList.SRCHECK")("check all")
+    by, _ = evaluate(ns)
+    check(by["fiver"].status == "OVER" and by["rogue"].status == "OK", "WB checked: final result")
 
     # ---- AQ40: 3 SR DPS / 4 SR tank, heal, pull hunter, warlock tank; +1 for 6 WB + flask
     ns.Import(ns, gargul_encode(raid_fixture("aq40", [
@@ -602,22 +719,40 @@ def test_presets():
     ns.SetAdjustment(ns, "mage", 0)
     lua.eval("function(p) table.remove(p.rules) end")(prof)
 
-    # ---- Test: 1 SR + Mark of the Wild + Thorns + any world buff
+    # ---- Test: 3 SR DPS / 4 SR tank, healer; +1 for a flask or 3 WB
     ns.SetAdjustment(ns, "mage", 0)
     ns.SetActiveProfile(ns, "Test")
+    tp = ns.GetProfile(ns)
+    check([g.name for g in tp.groups.values()] == ["WB", "Flask"] and tp.base.DPS == 3 and tp.base.TANK == 4
+          and len(ns.ProfileProblems(ns, tp)) == 0, "Test preset: WB + Flask groups, 3/4/4, no problems")
+    lua.eval("SlashCmdList.SRCHECK")("role Tanky auto")
+    ns.SetRole(ns, "tanky", "TANK")
+    ns.Import(ns, gargul_encode(raid_fixture("mc", [
+        sr("Rogue", "rogue", 4), sr("Mage", "mage", 4), sr("Huntard", "hunter", 4), sr("Tanky", "warrior", 5),
+        sr("Basic", "priest", 3)])))
+    ns.SetActiveProfile(ns, "Test")
     set_raid(lua, [
-        {"name": "Rogue", "class": "ROGUE", "buffs": [9885, [9910, "Thorns"], 15366]},     # ids
-        {"name": "Mage", "class": "MAGE", "buffs": [[None, "Gift of the Wild"], [None, "Thorns"]]},  # names only
-        {"name": "Huntard", "class": "HUNTER", "buffs": [21850]},                         # Gift of the Wild id
-        {"name": "Tanky", "class": "WARRIOR", "buffs": []},
+        {"name": "Rogue", "class": "ROGUE", "buffs": [TITANS]},                  # flask only
+        {"name": "Mage", "class": "MAGE", "buffs": WB[:3]},                      # 3 WB only
+        {"name": "Huntard", "class": "HUNTER", "buffs": WB[:2] + [349981]},      # 2 WB, rest in a boon
+        {"name": "Tanky", "class": "WARRIOR", "buffs": [17628]},                 # Supreme Power flask
+        {"name": "Basic", "class": "PRIEST", "buffs": []},
     ])
     ns.ResetScans(ns)
     ns.Scan(ns, True)
     by, _ = evaluate(ns)
-    check(by["rogue"].maxAllowed == 4, "Test: MotW + Thorns + Songflower = 4")
-    check(by["mage"].maxAllowed == 3, "Test: matched by buff name (Gift of the Wild, Thorns) = 3")
-    check(by["huntard"].maxAllowed == 2, "Test: Gift of the Wild id counts as MotW = 2")
-    check(by["tanky"].maxAllowed == 1, "Test: nothing = 1")
+    check(by["rogue"].status == "OK" and by["rogue"].maxAllowed == 4, "Test: DPS with a flask: 4")
+    check(by["mage"].status == "OK" and by["mage"].maxAllowed == 4, "Test: DPS with 3 WB: 4")
+    check(by["huntard"].deduct == 1 and ns.MissingText(by["huntard"]) == "Flask or 3 WB: Flask 0/1 or WB 2/3",
+          "Test: 2 WB, no flask: 3 (" + ns.MissingText(by["huntard"]) + ")")
+    check(by["tanky"].status == "OK" and by["tanky"].maxAllowed == 5, "Test: tank with a flask: 5")
+    check(by["basic"].status == "OK" and by["basic"].maxAllowed == 3, "Test: DPS with 3 SR, no buffs: OK")
+    # Flask first: a flask decides it at once, everyone else waits for WB.
+    lua.eval("SlashCmdList.SRCHECK")("skip WB")
+    by, _ = evaluate(ns)
+    check(by["rogue"].status == "OK" and by["huntard"].status == "PENDING" and by["huntard"].needs[1] == "3 WB",
+          "Test, WB on hold: flask = OK now, no flask = pending, needs 3 WB")
+    lua.eval("SlashCmdList.SRCHECK")("check all")
 
 
 def test_buff_ids():
@@ -672,6 +807,12 @@ def test_saved_variables(path):
     seed = open(path, encoding="utf-8").read()
     lua, ns = new_runtime(generic=False, seed=seed)
     check(lua.eval("SRCheckDB.presetsVersion") == ns.PRESETS_VERSION, "migrated to current presets")
+    for name in ("BWL", "AQ40", "Test"):
+        problems = list(ns.ProfileProblems(ns, ns.GetProfile(ns, name)).values())
+        check(not problems, "%s profile has no problems after migration %s" % (name, problems))
+    tp = ns.GetProfile(ns, "Test")
+    print("    Test: base %s, groups %s, rules %s" % (dict(tp.base), [g.name for g in tp.groups.values()],
+                                                     [r.condition for r in tp.rules.values()]))
     seen = lua.eval("SRCheckDB.session and SRCheckDB.session.seen") or {}
     for key in list(seen.keys()):
         for name in ("BWL", "AQ40"):
@@ -713,6 +854,7 @@ def main():
     lua, ns = new_runtime(ui=True)
     test_ui(lua, ns)
     test_presets()
+    test_options_editing()
     test_buff_ids()
     for path in glob.glob(os.path.expanduser(
             "~/wow/World of Warcraft/_classic_era_/WTF/Account/*/SavedVariables/SRCheck.lua")):

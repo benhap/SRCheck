@@ -43,12 +43,11 @@ SRC.FLASK_SPELLS = table.concat({
     "Flask of*",
 }, "/")
 
+-- Supercharged Chronoboon Displacer: world buffs stored, not active (not counted).
+SRC.CHRONOBOON_ID = 349981
+
 -- Spell IDs and the newer IDs of the same buff; used to upgrade saved lists.
 SRC.SPELL_ID_ALIASES = { [22888] = { 355363 }, [24425] = { 355365 }, [16609] = { 355366 } }
-
--- Druid buffs for the Test profile; names too, so every rank counts.
-SRC.MOTW_SPELLS = "Mark of the Wild/Gift of the Wild/1126/5232/6756/5234/8907/9884/9885/21849/21850"
-SRC.THORNS_SPELLS = "Thorns/467/782/1075/8914/9756/9910"
 
 ------------------------------------------------------------
 -- Profiles
@@ -86,12 +85,13 @@ end
 
 -- The guild's raid setups, created on first run.
 local PRESETS = {
-    -- 2 SR DPS / 3 SR tank, healer, pull hunter, mage tank; +1 for 5+ WB, +1 for a flask
+    -- 3 SR DPS / 4 SR tank, healer, pull hunter, mage tank; +1 for 3 WB + a flask
+    -- or for 6 WB
     BWL = function()
         local p = SRC:BaseProfile("BWL")
         p.instances = { "bwl" }
-        p.base = { DPS = 2, TANK = 3, HEALER = 3 }
-        p.rules = { rule("5 WB", "5 WB", 1), rule("Flask", "Flask", 1) }
+        p.base = { DPS = 3, TANK = 4, HEALER = 4 }
+        p.rules = { rule("Buffs", "3 WB + Flask or 6 WB", 1) }
         p.assignments = { { name = "Pull Hunter", role = "TANK" }, { name = "Mage Tank", role = "TANK" } }
         return p
     end,
@@ -105,26 +105,17 @@ local PRESETS = {
         p.assignments = { { name = "Pull Hunter", role = "TANK" }, { name = "Warlock Tank", role = "TANK" } }
         return p
     end,
-    -- Detection check: 1 SR + 1 each for Mark of the Wild, Thorns, any world buff
+    -- 3 SR DPS / 4 SR tank, healer; +1 for a flask or 3 WB (used e.g. for MC)
     Test = function()
         local p = SRC:BaseProfile("Test")
-        p.base = { DPS = 1, TANK = 1, HEALER = 1 }
-        p.groups = {
-            { name = "MotW", spells = SRC.MOTW_SPELLS },
-            { name = "Thorns", spells = SRC.THORNS_SPELLS },
-            wbGroup(),
-        }
-        p.rules = {
-            rule("Mark of the Wild", "MotW", 1),
-            rule("Thorns", "Thorns", 1),
-            rule("World buff", "WB", 1),
-        }
+        p.base = { DPS = 3, TANK = 4, HEALER = 4 }
+        p.rules = { rule("Flask or 3 WB", "Flask or 3 WB", 1) }
         return p
     end,
 }
 SRC.PRESET_ORDER = { "BWL", "AQ40", "Test" }
 -- Bump when presets change so existing installs receive them (see InitDB).
-SRC.PRESETS_VERSION = 5
+SRC.PRESETS_VERSION = 7
 
 function SRC:PresetProfile(name)
     return PRESETS[name] and PRESETS[name]()

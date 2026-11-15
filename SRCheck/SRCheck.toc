@@ -2,7 +2,7 @@
 ## Title: SRCheck
 ## Notes: Verifies softres.it soft-reserve counts against your guild's SR rules (role, world buffs, flask, ...). Works with the Gargul export string.
 ## Author: petr
-## Version: 1.2.0
+## Version: 1.3.2
 ## IconTexture: Interface\Icons\INV_Misc_Note_05
 ## SavedVariables: SRCheckDB
 ## OptionalDeps: Gargul

@@ -17,7 +17,7 @@
 local ADDON, SRC = ...
 
 SRC.LABEL = "|cff33ccffSRCheck|r"
-SRC.VERSION = "1.2.0"
+SRC.VERSION = "1.3.2"
 
 -- A session (scans, adjustments) is kept when the same softres raid is
 -- re-imported within this many seconds; otherwise a new one is started.
@@ -182,6 +182,32 @@ function SRC:InitDB()
     local db = SRCheckDB
     db.profiles = db.profiles or {}
     db.instanceProfile = db.instanceProfile or {} -- softres instance slug -> profile name
+
+    -- v7: Test became a real raid setup (3/4, +1 for "Flask or 3 WB"); replace
+    -- whatever Test holds (editing bugs before 1.3.1 could leave it mixed up).
+    -- Who is assigned what is kept.
+    if (db.presetsVersion or 0) < 7 then
+        for _, p in ipairs(db.profiles) do
+            if p.name == "Test" then
+                local fresh = self:PresetProfile("Test")
+                p.base, p.groups, p.rules, p.assignments = fresh.base, fresh.groups, fresh.rules, fresh.assignments
+            end
+        end
+    end
+
+    -- v6: BWL is 3/4 + 1 for "3 WB + Flask or 6 WB" (was 2/3, +1 for 5 WB,
+    -- +1 for a flask). Convert only the untouched preset.
+    if (db.presetsVersion or 0) < 6 then
+        for _, p in ipairs(db.profiles) do
+            local r, b = p.rules, p.base
+            if p.name == "BWL" and r and #r == 2 and r[1].condition == "5 WB" and r[1].bonus == 1
+                and r[2].condition == "Flask" and r[2].bonus == 1
+                and b and b.DPS == 2 and b.TANK == 3 and b.HEALER == 3 then
+                local fresh = self:PresetProfile("BWL")
+                p.base, p.rules = fresh.base, fresh.rules
+            end
+        end
+    end
 
     -- v5: AQ40 is base + 1 for "6 WB + Flask" (earlier presets made it required,
     -- else 0 SR - as one rule, or split in two). Convert only untouched presets.

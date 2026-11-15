@@ -330,6 +330,35 @@ local function adjTooltip(data)
     }
 end
 
+-- What a player has of each buff group a multi-part rule uses: "WB 4, no Flask"
+-- (groups on hold greyed).
+local function groupCounts(r)
+    local order, info = {}, {}
+    for _, o in ipairs(r.options) do
+        for _, t in ipairs(o.terms) do
+            local g = info[t.label]
+            if not g then
+                g = { label = t.label, count = t.count, need = t.need, held = t.held }
+                info[t.label] = g
+                order[#order + 1] = g
+            elseif t.need > g.need then
+                g.need = t.need
+            end
+        end
+    end
+    local parts = {}
+    for _, g in ipairs(order) do
+        local text
+        if g.need > 1 then
+            text = ("%s %d"):format(g.label, g.count or 0)
+        else
+            text = (g.count or 0) > 0 and g.label or ("no " .. g.label)
+        end
+        parts[#parts + 1] = g.held and ("|cff8f8f8f" .. text .. "|r") or text
+    end
+    return table.concat(parts, ", ")
+end
+
 -- "OK World Buffs  FAIL Flask" style compliance summary.
 local function complianceText(data)
     local parts = {}
@@ -337,14 +366,17 @@ local function complianceText(data)
         local icon = (r.ok == true and ICON_OK) or (r.ok == false and ICON_FAIL) or ICON_UNKNOWN
         local label = r.rule.name
         local o = r.options[1]
-        if #r.options == 1 and #o.terms == 1 and o.terms[1].need > 1 then
+        if #r.options == 1 and #o.terms == 1 then
             local t = o.terms[1]
-            label = ("%s %s/%d"):format(t.label, t.count or "?", t.need)
+            if t.need > 1 then label = ("%s %s/%d"):format(t.label, t.count or "?", t.need) end
+            if r.pending then label = "|cff8f8f8f" .. label .. "|r" end -- on hold: shown, not counted
+        elseif data.groups[1] then
+            label = label .. " (" .. groupCounts(r) .. ")" -- "Buffs (WB 4, no Flask)"
         end
-        if r.pending then label = "|cff8f8f8f" .. label .. "|r" end -- on hold: shown, not counted
         parts[#parts + 1] = icon .. label
     end
     local text = table.concat(parts, "  ")
+    if data.boon then text = text .. "  |cff9d9d9d[boon]|r" end
     if data.member and data.state ~= "ok" then
         text = text .. "  |cff9d9d9d(" .. SRC.StateText(data) .. ")|r"
     elseif not data.member then
@@ -364,6 +396,9 @@ local function rowTooltip(data)
         lines[#lines + 1] = ("softres name: %s (%s match)"):format(data.player.name, data.linkKind or "?")
     end
     lines[#lines + 1] = ("Role: %s |cff9d9d9d(%s)|r"):format(data.roleLabel, data.roleSource)
+    if data.player and data.player.note then
+        lines[#lines + 1] = "softres note: |cffffffff" .. data.player.note .. "|r"
+    end
     if data.excluded then
         local would = SRC.STATUS[data.wouldStatus].label
         if data.wouldStatus == "OVER" then
@@ -382,13 +417,19 @@ local function rowTooltip(data)
             local now = (r.met == true and "met") or (r.met == false and SRC.RuleShortfall(r, true)) or "not scanned"
             local waiting = {}
             for label in pairs(r.waiting) do waiting[#waiting + 1] = label end
-            detail = (" |cffd8c070waiting for %s|r |cff9d9d9d(now: %s)|r"):format(table.concat(waiting, ", "), now)
+            detail = (" |cffd8c070waiting for %s: needs %s|r |cff9d9d9d(now: %s)|r"):format(
+                table.concat(waiting, ", "), SRC.StillNeeded(r), now)
         end
         local effect = r.rule.required and "required (else 0 SR):" or ("%+d"):format(r.rule.bonus or 0)
         lines[#lines + 1] = ("   %s %s %s (%s)%s"):format(icon, effect, r.rule.name,
             SRC.Trim(r.rule.condition), detail)
     end
     if data.adj ~= 0 then lines[#lines + 1] = ("   manual %+d"):format(data.adj) end
+
+    if data.boon then
+        lines[#lines + 1] = " "
+        lines[#lines + 1] = "|cffd8c070Chronoboon loaded:|r stored world buffs are not active yet and don't count."
+    end
 
     if #data.groups > 0 then
         lines[#lines + 1] = " "
@@ -484,6 +525,8 @@ local function fillRow(row, data)
         label = ("%s -%d"):format(label, data.deduct)
     elseif data.status == "UNDER" then
         label = ("%s +%d"):format(label, data.extra)
+    elseif data.status == "PENDING" and data.needs[1] then
+        label = ("%s: %s"):format(label, data.needs[1]) -- "Pending: 3 WB"
     elseif data.status == "SKIPPED" and data.wouldStatus == "OVER" then
         label = ("%s (-%d)"):format(label, data.wouldDeduct)
     end
@@ -545,6 +588,23 @@ function SRC:BuildMain()
     checkHover:SetScript("OnLeave", GameTooltip_Hide)
     f.checkLabel = checkLabel
     f.ruleChecks = {}
+
+    -- Setup problems of the active profile (empty groups, broken rules, ...)
+    local problemText = f:CreateFontString(nil, "OVERLAY", "GameFontHighlightSmall")
+    problemText:SetPoint("TOPRIGHT", -14, -76)
+    problemText:SetWidth(300)
+    problemText:SetJustifyH("RIGHT")
+    problemText:SetWordWrap(false)
+    local problemHover = CreateFrame("Frame", nil, f)
+    problemHover:SetAllPoints(problemText)
+    problemHover:SetScript("OnEnter", function(self)
+        local lines = { "Rule problems in this profile" }
+        for _, p in ipairs(SRC:ProfileProblems(SRC:GetProfile())) do lines[#lines + 1] = "- " .. p end
+        lines[#lines + 1] = "|cff9d9d9dFix them in Rules...|r"
+        showTooltip(self, lines)
+    end)
+    problemHover:SetScript("OnLeave", GameTooltip_Hide)
+    f.problemText = problemText
 
     -- Column headers; the first one includes/excludes everyone.
     local all = self:CheckBox(f, nil, function(checked) SRC:SetAllExcluded(not checked) end,
@@ -615,7 +675,7 @@ function SRC:CycleProfile(delta)
     end
     local nextIndex = (cur - 1 + delta) % #profiles + 1
     self:SetActiveProfile(profiles[nextIndex].name, true)
-    if self.options and self.options:IsShown() then self:RefreshOptions() end
+    if self.options and self.options:IsShown() then self:RefreshOptions(true) end
 end
 
 function SRC:RefreshUI()
@@ -626,6 +686,9 @@ function SRC:RefreshUI()
     f.profName:SetText(self:GetProfile().name)
     f.problems:SetChecked(self.db.options.problemsOnly)
     f.send:SetEnabled(_G.Gargul ~= nil and self.data ~= nil)
+    local problems = self:ProfileProblems(self:GetProfile())
+    f.problemText:SetText(#problems > 0 and ("|cffff4040! %s%s|r"):format(problems[1],
+        #problems > 1 and (" (+%d)"):format(#problems - 1) or "") or "")
 
     if not self.data or not s then
         f.subtitle:SetText("")
